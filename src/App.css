@@ -1,42 +1,52 @@
-#root {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
+/* App.css */
+.app-container {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+}
+
+/* 左側：メインキャンバス（地図） */
+.canvas-area {
+  flex-grow: 1;
+  height: 100%;
+  border-right: 1px solid #ddd;
+}
+
+/* 右側：インスペクター（詳細パネル） */
+.inspector-area {
+  width: 300px;
+  padding: 20px;
+  background-color: #f9f9f9;
+  overflow-y: auto;
+  box-shadow: -2px 0 5px rgba(0,0,0,0.1);
+}
+
+.inspector-title {
+  margin-top: 0;
+  color: #333;
+  border-bottom: 2px solid #007bff;
+  padding-bottom: 10px;
+}
+
+.formula-box {
+  background: white;
+  padding: 15px;
+  border: 1px solid #ccc;
+  border-radius: 5px;
+  margin: 15px 0;
+  font-family: 'Times New Roman', serif;
+  font-style: italic;
+  font-size: 1.2rem;
   text-align: center;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafbaa);
+.description-box {
+  line-height: 1.6;
+  color: #555;
 }
 
-@keyframes logo-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  a:nth-of-type(2) .logo {
-    animation: logo-spin infinite 20s linear;
-  }
-}
-
-.card {
-  padding: 2em;
-}
-
-.read-the-docs {
+.empty-state {
   color: #888;
+  text-align: center;
+  margin-top: 50px;
 }
