@@ -66,47 +66,6 @@ const getInitialFlow = () => {
   };
 };
 
-/*const initialNodes = [
-  { 
-    id: '1', 
-    position: { x: 250, y: 50 }, 
-    data: { 
-      label: '運動方程式', 
-      formula: 'F = ma', 
-      description: '物体に働く力 F は、質量 m と加速度 a の積に等しい。ニュートン力学の基礎。',
-      category: 'mechanics' 
-    },
-    style: { background: '#E3F2FD', border: '1px solid #2196F3', width: 150 }
-  },
-  { 
-    id: '2', 
-    position: { x: 100, y: 200 }, 
-    data: { 
-      label: '加速度の定義', 
-      formula: 'a = \\frac{dv}{dt}', 
-      description: '加速度 a は速度 v の時間微分である。',
-      category: 'mechanics' 
-    },
-    style: { background: '#E3F2FD', border: '1px solid #F44336', width: 150 }
-  },
-  { 
-    id: '3', 
-    position: { x: 400, y: 200 }, 
-    data: { 
-      label: '運動量保存則', 
-      formula: 'p = mv (const)', 
-      description: '外力が働かない場合、系の総運動量は保存される。',
-      category: 'mechanics' 
-    },
-    style: { background: '#E3F2FD', border: '1px solid #4CAF50', width: 150 }
-  },
-];
-
-const initialEdges = [
-  { id: 'e1-2', source: '2', target: '1', animated: true, label: '代入' },
-  { id: 'e1-3', source: '1', target: '3', label: '積分' }
-];*/
-
 const categoryStyles = {
   mechanics: { background: '#E3F2FD', border: '1px solid #2196F3' }, // 青系
   electromagnetism: { background: '#FFEBEE', border: '1px solid #F44336' }, // 赤系
@@ -130,6 +89,7 @@ function PhysicsMapper() {
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [isEditing, setIsEditing] = useState(false)
   const [formData, setFormData] = useState({label: '', formula: '', description: '', category: 'default'})
+  const [highlightedNodes, setHighlightedNodes] = useState(new Set());
 
   // React Flowのインスタンス操作用（画面中心取得のため）
   const { project, getViewport } = useReactFlow();
@@ -153,8 +113,21 @@ function PhysicsMapper() {
       setSelectedNodeId(node.id);
       setFormData(node.data);
       setIsEditing(false);
+      const newHighlightedNodes = new Set();
+      newHighlightedNodes.add(node.id); // 自身を選択
+
+      // 関連するエッジを検索し、関連ノードIDを収集
+      edges.forEach(edge => {
+        if (edge.source === node.id || edge.target === node.id) {
+            newHighlightedNodes.add(edge.source);
+            newHighlightedNodes.add(edge.target);
+        }
+      }
+    );
+
+    setHighlightedNodes(newHighlightedNodes);
     },
-    []
+    [edges]
   );
 
   // 背景（キャンバス）をクリックしたら選択解除
@@ -162,6 +135,7 @@ function PhysicsMapper() {
     () => {
       setSelectedNodeId(null);
       setIsEditing(false);
+      setHighlightedNodes(new Set());
     },
     []
   );
@@ -233,13 +207,44 @@ function PhysicsMapper() {
 
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
 
+  const styledNodes = nodes.map(node => {
+    // ノードがハイライトされているか確認
+    const isHighlighted = highlightedNodes.size === 0 || highlightedNodes.has(node.id);
+    
+    // スタイルをコピー
+    const style = { ...node.style };
+
+    // ハイライトされていないノードは透明度を低くする
+    if (!isHighlighted) {
+        style.opacity = 0.3;
+    } else {
+        style.opacity = 1;
+    }
+
+    return { ...node, style };
+  });
+  
+  // エッジも同様にスタイルを適用する（ハイライトされていないエッジは薄くする）
+  const styledEdges = edges.map(edge => {
+    const isHighlighted = highlightedNodes.size === 0 || 
+                          (highlightedNodes.has(edge.source) && highlightedNodes.has(edge.target));
+    
+    const style = {
+        strokeWidth: isHighlighted ? 2 : 1,
+        stroke: isHighlighted ? '#222' : '#999',
+        opacity: isHighlighted ? 1 : 0.2
+    };
+
+    return { ...edge, style };
+  });
+
   return (
     <div className="app-container">
       {/* 左側：マップ領域 */}
       <div className="canvas-area">
         <ReactFlow
-          nodes={nodes}
-          edges={edges}
+          nodes={styledNodes}
+          edges={styledEdges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
