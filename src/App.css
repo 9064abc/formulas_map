@@ -125,6 +125,8 @@
   padding: 10px;
   width: 90%;
   box-sizing: border-box; /* パディングを含めて幅を計算 */
+  white-space: nowrap;    /* 強制的に改行させない */
+  word-wrap: normal;
 }
 
 /* ラベル表示の調整（数式と同じサイズ感にするため） */
@@ -136,4 +138,29 @@
 .node-formula-only {
   /* 数式描画エリアのパディング */
   padding: 10px 5px;
+  overflow-x: auto;
+}
+
+.node-formula-only .katex-display, .node-formula-only .katex {
+  white-space: nowrap;
+  word-wrap: normal;
+  /* 数式が長すぎた場合に備えて、ノード内部のスクロールは維持 */
+  overflow-x: auto; 
+}
+
+.react-flow__node {
+  /* width: 180px; など固定値を指定していた場合は削除または auto に上書き */
+  width: auto !important; /* React Flowが設定したwidthを上書き */
+  min-width: 150px;       /* App.jsのminWidthと連携 */
+  padding: 0;
+  border-radius: 4px;
+  box-sizing: border-box;
+}
+
+.custom-node-content {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: center;
+  box-sizing: border-box;
 }

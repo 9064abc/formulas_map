@@ -53,12 +53,12 @@ const getInitialFlow = () => {
       { 
         id: 'node-1', position: { x: 250, y: 50 }, 
         data: { label: '運動方程式', formula: 'F = ma', description: '物体に働く力 F は、質量 m と加速度 a の積に等しい。', category: 'mechanics' },
-        style: { background: '#E3F2FD', border: '1px solid #2196F3', width: 180 }
+        style: { background: '#E3F2FD', border: '1px solid #2196F3', minwidth: 180 }
       },
       { 
         id: 'node-2', position: { x: 100, y: 250 }, 
         data: { label: '加速度の定義', formula: 'a = \\frac{dv}{dt}', description: '加速度 a は速度 v の時間微分である。', category: 'mechanics' },
-        style: { background: '#E3F2FD', border: '1px solid #2196F3', width: 180 }
+        style: { background: '#E3F2FD', border: '1px solid #2196F3', minwidth: 180 }
       },
     ],
     edges: [
@@ -183,7 +183,7 @@ function PhysicsMapper() {
         description: 'ここに説明を書く', 
         category: 'default' 
       },
-      style: { ...categoryStyles.default, width: 150 }
+      style: { ...categoryStyles.default, minwidth: 150 }
     };
 
     setNodes((nds) => nds.concat(newNode));

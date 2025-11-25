@@ -16,7 +16,7 @@ function CustomNode({ data }) {
         )}
 
         {nodeContentType === 'formula' && formula && (
-            <div className="node-formula-only">
+            <div className="node-formula-only" style={{ width: 'max-content', maxWidth: '100%' }}>
                 <InlineMath math={formula} />
             </div>
         )}
