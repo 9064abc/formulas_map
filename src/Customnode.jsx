@@ -25,5 +25,4 @@ function CustomNode({ data }) {
     </div>
   );
 }
-
-export default CustomNode;
+export default React.memo(CustomNode);

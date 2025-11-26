@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect} from 'react';
+import React, { useState, useCallback, useEffect, useMemo} from 'react';
 import ReactFlow, { 
   Controls, 
   Background, 
@@ -32,6 +32,8 @@ const getInitialFlow = () => {
   
   if (savedFlow) {
     const { nodes, edges, idCount } = JSON.parse(savedFlow);
+    // data.nodeContentType を現在のグローバル設定で上書き
+    const unifiedNodes = nodes.map(node => ({...node, data: {...node.data, nodeContentType: 'label'}}));
 
     // IDカウンターの安全な初期化
     // 既存ノードの最大IDを求め、その次の番号から開始するようにする
@@ -41,7 +43,7 @@ const getInitialFlow = () => {
     }, 0);
     
     return {
-      nodes: nodes,
+      nodes: unifiedNodes,
       edges: edges,
       idCount: maxId > 0 ? maxId + 1 : 1 // 1からスタート
     };
@@ -91,6 +93,7 @@ function PhysicsMapper() {
   // 選択されたノードの情報を保持する状態
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [isEditing, setIsEditing] = useState(false)
+  const [isDragging, setIsDragging] = useState(false);
   const [formData, setFormData] = useState({label: '', formula: '', description: '', category: 'default'})
   const [highlightedNodes, setHighlightedNodes] = useState(new Set());
   const [relatedNodesInfo, setRelatedNodesInfo] = useState({sources: [], targets: []});
@@ -99,10 +102,20 @@ function PhysicsMapper() {
   const { project, getViewport } = useReactFlow();
 
   useEffect(() => {
-    // nodes, edges, idCount のいずれかが変更されたらローカルストレージに保存する
-    const flowToSave = JSON.stringify({ nodes, edges, idCount });
-    localStorage.setItem(flowKey, flowToSave);
-  }, [nodes, edges, idCount]);
+    // ユーザーが操作を停止した後に実行されるよう、タイマーを設定
+    const timer = setTimeout(() => {
+        if (nodes.length > 0) {
+            const flowToSave = JSON.stringify({ nodes, edges, idCount });
+            localStorage.setItem(flowKey, flowToSave);
+            console.log("データ保存を実行しました");
+        }
+    }, 500); // 500ミリ秒 (0.5秒) の遅延を設定
+
+    // クリーンアップ関数: 新しい変更があったら古いタイマーをキャンセル
+    return () => clearTimeout(timer);
+
+// nodes, edges, idCount のいずれかが変更されるたびにタイマーがリセットされる
+}, [nodes, edges, idCount]);
 
   // ノードがドラッグされた時の処理
   const onNodesChange = useCallback((changes) => setNodes((nds) => applyNodeChanges(changes, nds)),[]);
@@ -110,6 +123,22 @@ function PhysicsMapper() {
   const onEdgesChange = useCallback((changes) => setEdges((eds) => applyEdgeChanges(changes, eds)),[]);
   // ノード同士を手動でつないだ時の処理
   const onConnect = useCallback((params) => setEdges((eds) => addEdge(params, eds)),[]);
+
+  // ドラッグ開始時
+  const onNodeDragStart = useCallback(() => {
+  // ドラッグ中はハイライト計算を停止
+    setIsDragging(true); 
+  }, []);
+
+  // ドラッグ終了時
+  const onNodeDragStop = useCallback((event, node) => {
+    // ドラッグ終了後、ハイライトと選択状態を復元
+    setIsDragging(false); 
+  
+    // ドラッグ停止後、ノード選択をシミュレートしてハイライトを更新
+    // setSelectedNodeId(node.id); // これは onNodeClickで処理されるため、不要な場合がある
+
+  }, []);
 
   // ノードをクリックした時の処理（詳細パネルへの表示）
   const onNodeClick = useCallback(
@@ -181,7 +210,8 @@ function PhysicsMapper() {
         label: '新しい法則', 
         formula: 'x = ?', 
         description: 'ここに説明を書く', 
-        category: 'default' 
+        category: 'default' ,
+        nodeContentType: nodeContentType
       },
       style: { ...categoryStyles.default, minwidth: 150 }
     };
@@ -231,29 +261,48 @@ function PhysicsMapper() {
     event.preventDefault(); 
   }, []);
 
+  const handleToggleContentType = useCallback((newType) => {
+    // 1. グローバルな表示形式の状態を更新
+    setNodeContentType(newType);
+
+    // 2. ★★★ すべてのノードの data.nodeContentType を強制的に更新 ★★★
+    setNodes(prevNodes => prevNodes.map(node => ({
+        ...node,
+        data: {
+            ...node.data,
+            // 最新の表示タイプを data に強制的に書き込む
+            nodeContentType: newType,
+        },
+    })));
+}, [setNodes]); // setNodes を依存配列に入れる
+
   const selectedNode = nodes.find((n) => n.id === selectedNodeId);
 
-  const styledNodes = nodes.map(node => {
+  const styledNodes = useMemo(() => {return nodes.map(node => {
+    if (isDragging) {
+      // ハイライトクラスや薄くするクラスを付けず、元のノードを返す
+      /*const data = { ...node.data, }; 
+      data.nodeContentType = nodeContentType;*/
+      return { ...node, type: 'custom', /*data: {...data, nodeContentType: nodeContentType*/}; 
+    }
     // ノードがハイライトされているか確認
     const isHighlighted = highlightedNodes.size === 0 || highlightedNodes.has(node.id);
-    
-    // スタイルをコピー
-    const style = { ...node.style };
+    const isSelected = node.id === selectedNodeId;
 
-    // ハイライトされていないノードは透明度を低くする
-    if (!isHighlighted) {
-        style.opacity = 0.3;
-    } else {
-        style.opacity = 1;
+    let className = '';
+    if (isSelected) {
+        className += ' node-selected ';
+    } else if (isHighlighted) {
+        className += ' node-highlighted ';
+    } else if (selectedNodeId) {
+        className += ' node-dimmed '; // 選択中ノードがある場合、その他を薄くする
     }
 
-    const data = {
-      ...node.data,
-      nodeContentType: nodeContentType, // 'label' or 'formula'
-    };
+    const data = { ...node.data, }; 
+    data.nodeContentType = nodeContentType;
 
-    return { ...node, style, type: 'custom', data};
-  });
+    return { ...node,className: className.trim(), type: 'custom', data: data};
+  });},[nodes, highlightedNodes, selectedNodeId, nodeContentType, isDragging]);
   
   // エッジも同様にスタイルを適用する（ハイライトされていないエッジは薄くする）
   const styledEdges = edges.map(edge => {
@@ -282,6 +331,8 @@ function PhysicsMapper() {
           onNodeClick={onNodeClick}
           onPaneClick={onPaneClick}
           onEdgeDoubleClick={onEdgeDoubleClick}
+          onNodeDragStart={onNodeDragStart} 
+          onNodeDragStop={onNodeDragStop}
           nodeTypes={nodeTypes}
           fitView // 初期表示時に全体が見えるように調整
         >
@@ -295,13 +346,13 @@ function PhysicsMapper() {
         <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
           <button 
             className={`btn ${nodeContentType === 'label' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setNodeContentType('label')}
+            onClick={() => handleToggleContentType('label')}
           >
             タイトル表示
           </button>
           <button 
             className={`btn ${nodeContentType === 'formula' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => setNodeContentType('formula')}
+            onClick={() => handleToggleContentType('formula')}
           >
             数式表示
           </button>
@@ -402,6 +453,7 @@ function PhysicsMapper() {
     </div>
   );
 }
+
 export default function App(){
   console.log("I am function App");
   return(
