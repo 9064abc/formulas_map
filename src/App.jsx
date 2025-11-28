@@ -24,14 +24,37 @@ const getInitialFlow = () => {
     return { 
       nodes: [], 
       edges: [],
-      idCount: 1 
+      idCount: 1,
+      categories: [
+        { id: 'default', name: '未分類', color: '#D3D3D3' },
+        { id: 'mech', name: '古典力学', color: '#B3E5FC' },
+        { id: 'em', name: '電磁気学', color: '#FFCDD2' },
+        { id: 'therm', name: '熱力学', color: '#C8E6C9' },
+      ]
     };
   }
   
   const savedFlow = localStorage.getItem(flowKey);
   
   if (savedFlow) {
-    const { nodes, edges, idCount } = JSON.parse(savedFlow);
+    
+    const { nodes, edges, idCount, categories} = JSON.parse(savedFlow);
+    let ncategories;
+    //console.log("initial flow " + categories);
+    if(categories === undefined){
+      //console.log("react undefined");
+      ncategories = [
+        { id: 'default', name: '未分類', color: '#D3D3D3' },
+        { id: 'mech', name: '古典力学', color: '#B3E5FC' },
+        { id: 'em', name: '電磁気学', color: '#FFCDD2' },
+        { id: 'therm', name: '熱力学', color: '#C8E6C9' },
+      ];
+      //console.log("defined " + ncategories);
+    }else{
+      ncategories = categories;
+    }
+    //console.log("initial flow 2 " + ncategories);
+    
     // data.nodeContentType を現在のグローバル設定で上書き
     const unifiedNodes = nodes.map(node => ({...node, data: {...node.data, nodeContentType: 'label'}}));
 
@@ -45,7 +68,8 @@ const getInitialFlow = () => {
     return {
       nodes: unifiedNodes,
       edges: edges,
-      idCount: maxId > 0 ? maxId + 1 : 1 // 1からスタート
+      idCount: maxId > 0 ? maxId + 1 : 1 ,// 1からスタート
+      categories: ncategories
     };
   }
 
@@ -66,7 +90,13 @@ const getInitialFlow = () => {
     edges: [
       { id: 'e1-2', source: 'node-2', target: 'node-1', animated: true, label: '代入' }
     ],
-    idCount: 3
+    idCount: 3,
+    categories: [
+      { id: 'default', name: '未分類', color: '#D3D3D3' },
+      { id: 'mech', name: '古典力学', color: '#B3E5FC' },
+      { id: 'em', name: '電磁気学', color: '#FFCDD2' },
+      { id: 'therm', name: '熱力学', color: '#C8E6C9' },
+    ]
   };
 };
 
@@ -78,20 +108,34 @@ const categoryStyles = {
   default: { background: '#ffffff', border: '1px solid #777' }
 };
 
+
+
 // --- メインコンポーネント ---
 function PhysicsMapper() {
 
   const initialFlow = getInitialFlow();
 
   //console.log("start physicsmapper");
+  console.log(initialFlow.categories)
   // ノードとエッジの状態管理
+  const [categories, setCategories] = useState(initialFlow.categories);
+
+  const [edgeTypes, setEdgeTypes] = useState([
+    { id: 'derivation', name: '導出関係', style: { stroke: '#000000' }, marker: { type: 'arrowclosed' } },
+    { id: 'definition', name: '定義', style: { stroke: '#007BFF', strokeWidth: 2 }, marker: { type: 'arrowclosed' }, label: 'Def.' },
+    { id: 'equivalence', name: '同値関係', style: { stroke: '#28A745', strokeDasharray: '5, 5' }, marker: { type: 'arrowclosed', style: { fill: '#28A745' } }, type: 'customEquivalence', label: '⇔' }, // カスタムエッジを使用
+    { id: 'association', name: '関連', style: { stroke: '#6F42C1', strokeDasharray: '1, 2' }, marker: { type: 'none' } },
+  ]);
   const [nodes, setNodes] = useState(initialFlow.nodes);
   const [edges, setEdges] = useState(initialFlow.edges);
   const [idCount, setIdCount] = useState(initialFlow.idCount);
   const [nodeContentType, setNodeContentType] = useState('label');
+  const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState(null);
   
   // 選択されたノードの情報を保持する状態
   const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [selectedEdge, setSelectedEdge] = useState(null);
   const [isEditing, setIsEditing] = useState(false)
   const [isDragging, setIsDragging] = useState(false);
   const [formData, setFormData] = useState({label: '', formula: '', description: '', category: 'default'})
@@ -105,7 +149,7 @@ function PhysicsMapper() {
     // ユーザーが操作を停止した後に実行されるよう、タイマーを設定
     const timer = setTimeout(() => {
         if (nodes.length > 0) {
-            const flowToSave = JSON.stringify({ nodes, edges, idCount });
+            const flowToSave = JSON.stringify({ nodes, edges, idCount, categories});
             localStorage.setItem(flowKey, flowToSave);
             console.log("データ保存を実行しました");
         }
@@ -115,14 +159,26 @@ function PhysicsMapper() {
     return () => clearTimeout(timer);
 
 // nodes, edges, idCount のいずれかが変更されるたびにタイマーがリセットされる
-}, [nodes, edges, idCount]);
+}, [nodes, edges, idCount, categories]);
 
   // ノードがドラッグされた時の処理
   const onNodesChange = useCallback((changes) => setNodes((nds) => applyNodeChanges(changes, nds)),[]);
   // エッジが変更された時の処理
   const onEdgesChange = useCallback((changes) => setEdges((eds) => applyEdgeChanges(changes, eds)),[]);
+
+  const onEdgeClick = useCallback((event, edge) => {
+    if (selectedEdge && selectedEdge.id === edge.id) {
+      // 既に選択されているエッジを再度クリックした場合、パネルを閉じる
+      setSelectedEdge(null);
+  } else {
+      // 別のエッジをクリックした場合、そのエッジの編集パネルを開く
+      setSelectedEdge(edge);
+  }
+    // ノードパネルが開いていれば閉じるなど、必要に応じて調整
+    event.stopPropagation();
+}, [selectedEdge]);
   // ノード同士を手動でつないだ時の処理
-  const onConnect = useCallback((params) => setEdges((eds) => addEdge(params, eds)),[]);
+  const onConnect = useCallback((params) => setEdges((eds) => addEdge({...params, typeId: 'derivation'}, eds)),[]);
 
   // ドラッグ開始時
   const onNodeDragStart = useCallback(() => {
@@ -141,6 +197,24 @@ function PhysicsMapper() {
   }, []);
 
   // ノードをクリックした時の処理（詳細パネルへの表示）
+  const onChangeCategory = useCallback( (event) => {
+    const { name, value } = event.target;
+    
+    if (value === 'new-category') {
+        // ★★★ "新規追加"が選択されたらモーダルを開く ★★★
+        console.log('new-category')
+        setIsCategoryModalOpen(true);
+        return; 
+    }
+    console.log('setform'+ value+name)
+    // 通常のフォーム処理（handleFormChange の内容）
+    setFormData((prevData) => { return{
+        ...prevData,
+        [name]: value};
+    });
+    }, [setIsCategoryModalOpen, setFormData]
+  );
+
   const onNodeClick = useCallback(
     (event, node) => {
       setSelectedNodeId(node.id);
@@ -190,10 +264,45 @@ function PhysicsMapper() {
       setSelectedNodeId(null);
       setIsEditing(false);
       setHighlightedNodes(new Set());
+      setSelectedEdge(null);
       setRelatedNodesInfo({ sources: [], targets: [] });
     },
     []
   );
+
+  const handleSaveCategory = useCallback((newCategory) => {
+    setCategories(prevCategories => {
+        // IDが既存であれば更新、なければ追加
+        const existingIndex = prevCategories.findIndex(c => c.id === newCategory.id);
+        if (existingIndex > -1) {
+            // 更新
+            const updatedCategories = [...prevCategories];
+            updatedCategories[existingIndex] = newCategory;
+            return updatedCategories;
+        } else {
+            // 新規追加
+            return [...prevCategories, { 
+                ...newCategory, 
+                // IDはユニークなタイムスタンプなどで生成
+                id: new Date().getTime().toString() 
+            }];
+        }
+    });
+    setIsCategoryModalOpen(false); // モーダルを閉じる
+    setEditingCategory(null);
+  }, []);
+
+
+// ★★★ カテゴリーの削除処理 (オプションだが推奨) ★★★
+  const handleDeleteCategory = useCallback((category) => {
+    setCategories(prevCategories => prevCategories.filter(c => c.id !== category));
+
+    // ノードデータも未分類に戻す処理（ここでは省略。必要なら後で追加）
+    // setNodes(prevNodes => prevNodes.map(n => 
+    //     n.data.categoryId === categoryId ? { ...n, data: { ...n.data, categoryId: 'default' } } : n
+    // ));
+
+  }, []);
 
   const handleAddNode = () => {
     // 現在の画面の中心座標を計算する
@@ -237,15 +346,25 @@ function PhysicsMapper() {
   };
 
   const handleSave = () => {
+    // 1. formDataから選択されたカテゴリーIDを取得
+    const selectedCategoryId = formData.category || 'default'; 
+    
+    // 2. categories配列から、そのIDを持つカテゴリーオブジェクトを直接検索
+    const selectedCategory = categories.find(
+        cat => cat.id === selectedCategoryId
+    ) || categories.find(cat => cat.id === 'default'); // 見つからなければデフォルトに戻す
+    
+    // 3. 取得したカテゴリーの色を決定
+    const newBackgroundColor = selectedCategory ? selectedCategory.color : '#D3D3D3';
     setNodes((nds) =>
       nds.map((node) => {
         if (node.id === selectedNodeId) {
           // カテゴリに応じて色も更新
-          const style = categoryStyles[formData.category] || categoryStyles.default;
+          //const style = categoryStyles[formData.category] || categoryStyles.default;
           return {
             ...node,
             data: { ...formData },
-            style: { ...style, width: 180 }
+            style: { ...node.style, backgroundColor: newBackgroundColor, width: 180 }
           };
         }
         return node;
@@ -304,19 +423,31 @@ function PhysicsMapper() {
     return { ...node,className: className.trim(), type: 'custom', data: data};
   });},[nodes, highlightedNodes, selectedNodeId, nodeContentType, isDragging]);
   
-  // エッジも同様にスタイルを適用する（ハイライトされていないエッジは薄くする）
-  const styledEdges = edges.map(edge => {
-    const isHighlighted = highlightedNodes.size === 0 || 
+  
+  const styledEdges = useMemo(() => {
+    return edges.map(edge => {
+        // 1. エッジの種類（typeId）を取得
+        const edgeType = edgeTypes.find(et => et.id === edge.typeId) || edgeTypes.find(et => et.id === 'derivation');
+        const isHighlighted = highlightedNodes.size === 0 || 
                           (highlightedNodes.has(edge.source) && highlightedNodes.has(edge.target));
     
-    const style = {
-        strokeWidth: isHighlighted ? 2 : 1,
-        stroke: isHighlighted ? '#222' : '#999',
-        opacity: isHighlighted ? 1 : 0.2
-    };
+        const style = {
+          strokeWidth: isHighlighted ? 2 : 1,
+          stroke: isHighlighted ? '#222' : '#999',
+          opacity: isHighlighted ? 1 : 0.2
+        };
 
-    return { ...edge, style };
-  });
+        // 2. 種類に基づいてスタイルとプロパティを適用
+        return {
+            ...edge,
+            // React Flowが認識する標準プロパティに変換して適用
+            type: edgeType.type || 'default', // カスタムタイプがなければ 'default'
+            style: edgeType.style,
+            markerEnd: edgeType.marker,
+            label: edgeType.label,
+        };
+    });
+}, [edges, edgeTypes]);
 
   return (
     <div className="app-container">
@@ -330,6 +461,7 @@ function PhysicsMapper() {
           onConnect={onConnect}
           onNodeClick={onNodeClick}
           onPaneClick={onPaneClick}
+          onEdgeClick={onEdgeClick}
           onEdgeDoubleClick={onEdgeDoubleClick}
           onNodeDragStart={onNodeDragStart} 
           onNodeDragStop={onNodeDragStop}
@@ -339,6 +471,82 @@ function PhysicsMapper() {
           <Background color="#aaa" gap={16} />
           <Controls />
         </ReactFlow>
+        {selectedEdge && (
+        <div className="inspector-panel" style={{ 
+          // スタイルは適宜調整してください
+          top: 10, left: 10, width: 300, position: 'absolute', 
+          zIndex: 10 // 他の要素の上に表示させるため
+          }}>
+          <h3>エッジ情報</h3>
+          <p>From: {selectedEdge.source} / To: {selectedEdge.target}</p>
+
+          <label htmlFor="edgeType">関係性:</label>
+          <select
+            id="edgeType"
+            value={selectedEdge.typeId || 'derivation'}
+            onChange={(e) => {
+                const newTypeId = e.target.value;
+                setEdges(eds => eds.map(edge => 
+                    edge.id === selectedEdge.id ? { ...edge, typeId: newTypeId } : edge
+                ));
+                // 編集中のパネル情報も更新
+                setSelectedEdge(prev => ({ ...prev, typeId: newTypeId }));
+            }}
+            >
+            {edgeTypes.map(type => (
+                <option key={type.id} value={type.id}>
+                    {type.name}
+                </option>
+            ))}
+          </select>
+        </div>
+        )}
+
+        {isCategoryModalOpen && (
+            <div className="modal-overlay" style={{
+                position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, 
+                backgroundColor: 'rgba(0,0,0,0.5)', display: 'flex', 
+                justifyContent: 'center', alignItems: 'center', zIndex: 100
+            }}>
+                <div className="modal-content" style={{ 
+                    backgroundColor: 'white', padding: '20px', borderRadius: '8px', 
+                    width: '300px' 
+                }}>
+                    <h3>新規カテゴリーの追加</h3>
+                    <form onSubmit={(e) => {
+                        e.preventDefault();
+                        const newName = e.target.categoryName.value;
+                        const newColor = e.target.categoryColor.value;
+                        if (newName) {
+                            handleSaveCategory({ name: newName, color: newColor });
+                        }
+                    }}>
+                        <label htmlFor="categoryName" style={{ display: 'block', marginTop: '10px' }}>名前</label>
+                        <input
+                            type="text"
+                            id="categoryName"
+                            name="categoryName"
+                            required
+                            style={{ width: 'calc(100% - 10px)', padding: '5px' }}
+                        />
+
+                        <label htmlFor="categoryColor" style={{ display: 'block', marginTop: '10px' }}>色</label>
+                        <input
+                            type="color"
+                            id="categoryColor"
+                            name="categoryColor"
+                            defaultValue="#FF5722"
+                            style={{ width: '100%', height: '40px', padding: '0', border: 'none' }}
+                        />
+
+                        <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'space-between' }}>
+                            <button type="button" onClick={() => setIsCategoryModalOpen(false)} style={{ background: '#ccc', padding: '10px' }}>キャンセル</button>
+                            <button type="submit" style={{ background: '#5cb85c', color: 'white', padding: '10px' }}>保存</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        )}
       </div>
 
       {/* 右側：詳細パネル領域 */}
@@ -380,13 +588,22 @@ function PhysicsMapper() {
                 onChange={(e) => setFormData({...formData, formula: e.target.value})}
               />
 
-              <label>カテゴリー</label>
-              <select  value={formData.category}  onChange={(e) => setFormData({...formData, category: e.target.value})}>
-                <option value="default">未分類</option>
-                <option value="mechanics">力学</option>
-                <option value="electromagnetism">電磁気学</option>
-                <option value="thermodynamics">熱力学</option>
-                <option value="math">数学・定義</option>
+              <label htmlFor="node-category">カテゴリー</label>
+              <select
+                id="node-category"
+                name="category"
+                value={formData.category || 'default'} // 初期値は'default'
+                onChange={onChangeCategory}
+                style={{ marginBottom: '10px' }}
+              >
+                {categories.map(cat => (
+                  <option key={cat.id} value={cat.id}>
+                    {cat.name}
+                  </option>
+                ))}
+                <option value="new-category" /*onClick={() => setIsCategoryModalOpen(true)}*/>
+                  ▶ 新規カテゴリーを追加
+                </option>
               </select>
 
               <label>説明・メモ</label>

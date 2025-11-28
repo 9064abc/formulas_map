@@ -37,7 +37,9 @@
   font-family: 'Times New Roman', serif;
   font-style: italic;
   font-size: 1.2rem;
-  text-align: center;
+  /*text-align: center;*/
+  white-space: nowrap;
+  overflow-x: auto;
 }
 
 .description-box {
