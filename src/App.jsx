@@ -6,7 +6,8 @@ import ReactFlow, {
   applyEdgeChanges,
   addEdge, 
   ReactFlowProvider,
-  useReactFlow
+  useReactFlow,
+  SelectionMode
 } from 'reactflow';
 import { InlineMath } from 'react-katex';
 import 'katex/dist/katex.min.css';
@@ -116,14 +117,14 @@ function PhysicsMapper() {
   const initialFlow = getInitialFlow();
 
   //console.log("start physicsmapper");
-  console.log(initialFlow.categories)
+  //console.log(initialFlow.categories)
   // ノードとエッジの状態管理
   const [categories, setCategories] = useState(initialFlow.categories);
 
   const [edgeTypes, setEdgeTypes] = useState([
     { id: 'derivation', name: '導出関係', style: { stroke: '#000000' }, marker: { type: 'arrowclosed' } },
     { id: 'definition', name: '定義', style: { stroke: '#007BFF', strokeWidth: 2 }, marker: { type: 'arrowclosed' }, label: 'Def.' },
-    { id: 'equivalence', name: '同値関係', style: { stroke: '#28A745', strokeDasharray: '5, 5' }, marker: { type: 'arrowclosed', style: { fill: '#28A745' } }, type: 'customEquivalence', label: '⇔' }, // カスタムエッジを使用
+    { id: 'equivalence', name: '同値関係', style: { stroke: '#28A745', strokeDasharray: '5, 5' }, marker: { type: 'arrowclosed', style: { fill: '#28A745' } }, type: 'default', label: '⇔' }, // カスタムエッジを使用
     { id: 'association', name: '関連', style: { stroke: '#6F42C1', strokeDasharray: '1, 2' }, marker: { type: 'none' } },
   ]);
   const [nodes, setNodes] = useState(initialFlow.nodes);
@@ -465,6 +466,8 @@ function PhysicsMapper() {
           onEdgeDoubleClick={onEdgeDoubleClick}
           onNodeDragStart={onNodeDragStart} 
           onNodeDragStop={onNodeDragStop}
+          selectionOnDrag={true} 
+          selectionMode={SelectionMode.Partial} 
           nodeTypes={nodeTypes}
           fitView // 初期表示時に全体が見えるように調整
         >
