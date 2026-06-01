@@ -228,98 +228,24 @@ const renderTextWithLineBreaks = (text) => {
   ));
 };
 
-const csvHeaders = ['record_type', 'payload_json'];
-
-const escapeCsvCell = (value) => {
-  const text = String(value ?? '');
-  return `"${text.replaceAll('"', '""')}"`;
-};
-
-const serializeCsv = (rows) => {
-  return [
-    csvHeaders.map(escapeCsvCell).join(','),
-    ...rows.map((row) => csvHeaders.map((header) => escapeCsvCell(row[header])).join(','))
-  ].join('\n');
-};
-
-const parseCsv = (text) => {
-  const rows = [];
-  let row = [];
-  let cell = '';
-  let inQuotes = false;
-
-  for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    const nextChar = text[index + 1];
-
-    if (inQuotes) {
-      if (char === '"' && nextChar === '"') {
-        cell += '"';
-        index += 1;
-      } else if (char === '"') {
-        inQuotes = false;
-      } else {
-        cell += char;
-      }
-      continue;
-    }
-
-    if (char === '"') {
-      inQuotes = true;
-    } else if (char === ',') {
-      row.push(cell);
-      cell = '';
-    } else if (char === '\n') {
-      row.push(cell);
-      rows.push(row);
-      row = [];
-      cell = '';
-    } else if (char !== '\r') {
-      cell += char;
-    }
-  }
-
-  row.push(cell);
-  rows.push(row);
-
-  if (rows.length === 0) return [];
-
-  const headers = rows[0];
-  return rows.slice(1)
-    .filter((cells) => cells.some((value) => value !== ''))
-    .map((cells) => Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ''])));
-};
-
-const buildExportRows = ({ nodes, edges, categories }) => {
+const buildExportData = ({ nodes, edges, categories }) => {
   const selectedNodeIds = new Set(nodes.map((node) => node.id));
   const selectedCategoryIds = new Set(nodes.map((node) => node.data?.category).filter(Boolean));
   const internalEdges = edges.filter((edge) => selectedNodeIds.has(edge.source) && selectedNodeIds.has(edge.target));
 
-  return [
-    {
-      record_type: 'metadata',
-      payload_json: JSON.stringify({ app: 'formulas_map', version: 1 })
-    },
-    ...categories
-      .filter((category) => selectedCategoryIds.has(category.id))
-      .map((category) => ({
-        record_type: 'category',
-        payload_json: JSON.stringify(category)
-      })),
-    ...nodes.map((node) => ({
-      record_type: 'node',
-      payload_json: JSON.stringify(node)
-    })),
-    ...internalEdges.map((edge) => ({
-      record_type: 'edge',
-      payload_json: JSON.stringify(edge)
-    }))
-  ];
+  return {
+    app: 'formulas_map',
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    categories: categories.filter((category) => selectedCategoryIds.has(category.id)),
+    nodes,
+    edges: internalEdges
+  };
 };
 
-const downloadCsv = (rows, filename) => {
-  const csv = serializeCsv(rows);
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+const downloadJson = (data, filename) => {
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: 'application/json;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
@@ -346,25 +272,13 @@ const makeUniqueCategoryId = (baseId, existingCategoryIds) => {
   return nextId;
 };
 
-const buildImportedFlowPatch = ({ csvText, nodes, edges, categories, idCount }) => {
-  const csvRows = parseCsv(csvText);
-  const parsedRows = csvRows.map((row) => ({
-    recordType: row.record_type,
-    payload: JSON.parse(row.payload_json)
-  }));
-
-  const importedCategories = parsedRows
-    .filter((row) => row.recordType === 'category')
-    .map((row) => row.payload);
-  const importedNodes = parsedRows
-    .filter((row) => row.recordType === 'node')
-    .map((row) => row.payload);
-  const importedEdges = parsedRows
-    .filter((row) => row.recordType === 'edge')
-    .map((row) => row.payload);
+const buildImportedFlowPatch = ({ importData, nodes, edges, categories, idCount }) => {
+  const importedCategories = Array.isArray(importData?.categories) ? importData.categories : [];
+  const importedNodes = Array.isArray(importData?.nodes) ? importData.nodes : [];
+  const importedEdges = Array.isArray(importData?.edges) ? importData.edges : [];
 
   if (importedNodes.length === 0) {
-    throw new Error('CSVにノード情報がありません。');
+    throw new Error('JSONにノード情報がありません。');
   }
 
   const nextCategories = [...categories];
@@ -601,6 +515,8 @@ function PhysicsMapper() {
   const [isFlowLoaded, setIsFlowLoaded] = useState(false);
   const [nodeContentType, setNodeContentType] = useState('label');
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
+  const [editingCategory, setEditingCategory] = useState(null);
+  const [assignNewCategoryToForm, setAssignNewCategoryToForm] = useState(false);
   
   // 選択されたノードの情報を保持する状態
   const [selectedNodeId, setSelectedNodeId] = useState(null);
@@ -612,6 +528,7 @@ function PhysicsMapper() {
   const [highlightedNodes, setHighlightedNodes] = useState(new Set());
   const [relatedNodesInfo, setRelatedNodesInfo] = useState({sources: [], targets: []});
   const [inspectorWidth, setInspectorWidth] = useState(300);
+  const [inspectorView, setInspectorView] = useState('tools');
   const importFileInputRef = useRef(null);
 
   // React Flowのインスタンス操作用（画面中心取得のため）
@@ -734,6 +651,8 @@ function PhysicsMapper() {
     if (value === 'new-category') {
         // ★★★ "新規追加"が選択されたらモーダルを開く ★★★
         console.log('new-category')
+        setEditingCategory(null);
+        setAssignNewCategoryToForm(true);
         setIsCategoryModalOpen(true);
         return; 
     }
@@ -752,6 +671,7 @@ function PhysicsMapper() {
       setSelectedNodeIds([node.id]);
       setFormData(node.data);
       setIsEditing(false);
+      setInspectorView('details');
 
       const sources = [];
       const targets = [];
@@ -803,26 +723,76 @@ function PhysicsMapper() {
     []
   );
 
-  const handleSaveCategory = useCallback((newCategory) => {
-    setCategories(prevCategories => {
-        // IDが既存であれば更新、なければ追加
-        const existingIndex = prevCategories.findIndex(c => c.id === newCategory.id);
-        if (existingIndex > -1) {
-            // 更新
-            const updatedCategories = [...prevCategories];
-            updatedCategories[existingIndex] = newCategory;
-            return updatedCategories;
-        } else {
-            // 新規追加
-            return [...prevCategories, { 
-                ...newCategory, 
-                // IDはユニークなタイムスタンプなどで生成
-                id: new Date().getTime().toString() 
-            }];
-        }
-    });
-    setIsCategoryModalOpen(false); // モーダルを閉じる
+  const openNewCategoryModal = useCallback((assignToForm = false) => {
+    setEditingCategory(null);
+    setAssignNewCategoryToForm(assignToForm);
+    setIsCategoryModalOpen(true);
   }, []);
+
+  const openEditCategoryModal = useCallback((category) => {
+    setEditingCategory(category);
+    setAssignNewCategoryToForm(false);
+    setIsCategoryModalOpen(true);
+  }, []);
+
+  const handleSaveCategory = useCallback((categoryInput) => {
+    const savedCategory = categoryInput.id
+      ? categoryInput
+      : {
+          ...categoryInput,
+          id: new Date().getTime().toString()
+        };
+
+    setCategories(prevCategories => {
+      const existingIndex = prevCategories.findIndex(c => c.id === savedCategory.id);
+      if (existingIndex > -1) {
+        const updatedCategories = [...prevCategories];
+        updatedCategories[existingIndex] = savedCategory;
+        return updatedCategories;
+      }
+      return [...prevCategories, savedCategory];
+    });
+
+    setNodes(prevNodes => prevNodes.map((node) => (
+      node.data?.category === savedCategory.id
+        ? { ...node, style: { ...node.style, backgroundColor: savedCategory.color } }
+        : node
+    )));
+
+    if (!categoryInput.id && assignNewCategoryToForm) {
+      setFormData(prevData => ({ ...prevData, category: savedCategory.id }));
+    }
+
+    setIsCategoryModalOpen(false);
+    setEditingCategory(null);
+    setAssignNewCategoryToForm(false);
+  }, [assignNewCategoryToForm]);
+
+  const handleDeleteCategory = useCallback((categoryId) => {
+    if (categoryId === 'default') {
+      window.alert('未分類カテゴリーは削除できません。');
+      return;
+    }
+
+    const category = categories.find((cat) => cat.id === categoryId);
+    const confirmed = window.confirm(`${category?.name || 'このカテゴリー'}を削除しますか？このカテゴリーのノードは未分類になります。`);
+    if (!confirmed) return;
+
+    setCategories(prevCategories => prevCategories.filter((cat) => cat.id !== categoryId));
+    setNodes(prevNodes => prevNodes.map((node) => {
+      if (node.data?.category !== categoryId) return node;
+      return {
+        ...node,
+        data: { ...node.data, category: 'default' },
+        style: { ...node.style, backgroundColor: '#D3D3D3' }
+      };
+    }));
+    setFormData(prevData => (
+      prevData.category === categoryId
+        ? { ...prevData, category: 'default' }
+        : prevData
+    ));
+  }, [categories]);
 
   const handleAddNode = () => {
     // 現在の画面の中心座標を計算する
@@ -852,6 +822,7 @@ function PhysicsMapper() {
     setSelectedNodeId(newId);
     setFormData(newNode.data);
     setIsEditing(true); // 即編集モードへ
+    setInspectorView('details');
   };
 
   const handleDeleteNode = () => {
@@ -893,7 +864,7 @@ function PhysicsMapper() {
     setIsEditing(false); // 閲覧モードに戻る
   };
 
-  const handleExportCsv = useCallback((scope) => {
+  const handleExportJson = useCallback((scope) => {
     const nodeIdsToExport = scope === 'all'
       ? new Set(nodes.map((node) => node.id))
       : new Set(selectedNodeIds.length > 0 ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : []);
@@ -904,27 +875,28 @@ function PhysicsMapper() {
       return;
     }
 
-    const rows = buildExportRows({ nodes: nodesToExport, edges, categories });
+    const exportData = buildExportData({ nodes: nodesToExport, edges, categories });
     const dateText = new Date().toISOString().slice(0, 10);
     const filename = scope === 'all'
-      ? `formulas-map-all-${dateText}.csv`
-      : `formulas-map-selection-${dateText}.csv`;
-    downloadCsv(rows, filename);
+      ? `formulas-map-all-${dateText}.json`
+      : `formulas-map-selection-${dateText}.json`;
+    downloadJson(exportData, filename);
   }, [categories, edges, nodes, selectedNodeId, selectedNodeIds]);
 
   const handleImportClick = useCallback(() => {
     importFileInputRef.current?.click();
   }, []);
 
-  const handleImportCsv = useCallback((event) => {
+  const handleImportJson = useCallback((event) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = () => {
       try {
+        const importData = JSON.parse(String(reader.result || '{}'));
         const patch = buildImportedFlowPatch({
-          csvText: String(reader.result || ''),
+          importData,
           nodes,
           edges,
           categories,
@@ -941,8 +913,8 @@ function PhysicsMapper() {
         setRelatedNodesInfo({ sources: [], targets: [] });
         setSelectedEdge(null);
       } catch (error) {
-        console.error('CSVのインポートに失敗しました', error);
-        window.alert('CSVのインポートに失敗しました。ファイル形式を確認してください。');
+        console.error('JSONのインポートに失敗しました', error);
+        window.alert('JSONのインポートに失敗しました。ファイル形式を確認してください。');
       } finally {
         event.target.value = '';
       }
@@ -1094,13 +1066,13 @@ function PhysicsMapper() {
                     backgroundColor: 'white', padding: '20px', borderRadius: '8px', 
                     width: '300px' 
                 }}>
-                    <h3>新規カテゴリーの追加</h3>
+                    <h3>{editingCategory ? 'カテゴリーの編集' : '新規カテゴリーの追加'}</h3>
                     <form onSubmit={(e) => {
                         e.preventDefault();
                         const newName = e.target.categoryName.value;
                         const newColor = e.target.categoryColor.value;
                         if (newName) {
-                            handleSaveCategory({ name: newName, color: newColor });
+                            handleSaveCategory({ id: editingCategory?.id, name: newName, color: newColor });
                         }
                     }}>
                         <label htmlFor="categoryName" style={{ display: 'block', marginTop: '10px' }}>名前</label>
@@ -1108,6 +1080,7 @@ function PhysicsMapper() {
                             type="text"
                             id="categoryName"
                             name="categoryName"
+                            defaultValue={editingCategory?.name || ''}
                             required
                             style={{ width: 'calc(100% - 10px)', padding: '5px' }}
                         />
@@ -1117,12 +1090,16 @@ function PhysicsMapper() {
                             type="color"
                             id="categoryColor"
                             name="categoryColor"
-                            defaultValue="#FF5722"
+                            defaultValue={editingCategory?.color || '#FF5722'}
                             style={{ width: '100%', height: '40px', padding: '0', border: 'none' }}
                         />
 
                         <div style={{ marginTop: '20px', display: 'flex', justifyContent: 'space-between' }}>
-                            <button type="button" onClick={() => setIsCategoryModalOpen(false)} style={{ background: '#ccc', padding: '10px' }}>キャンセル</button>
+                            <button type="button" onClick={() => {
+                              setIsCategoryModalOpen(false);
+                              setEditingCategory(null);
+                              setAssignNewCategoryToForm(false);
+                            }} style={{ background: '#ccc', padding: '10px' }}>キャンセル</button>
                             <button type="submit" style={{ background: '#5cb85c', color: 'white', padding: '10px' }}>保存</button>
                         </div>
                     </form>
@@ -1140,43 +1117,99 @@ function PhysicsMapper() {
 
       {/* 右側：詳細パネル領域 */}
       <div className="inspector-area">
-        <div className="io-panel">
-          <button className="btn btn-secondary" onClick={() => handleExportCsv('selected')}>
-            選択部分をCSV
-          </button>
-          <button className="btn btn-secondary" onClick={() => handleExportCsv('all')}>
-            全体をCSV
-          </button>
-          <button className="btn btn-secondary" onClick={handleImportClick}>
-            CSVから追加
-          </button>
-          <input
-            ref={importFileInputRef}
-            type="file"
-            accept=".csv,text/csv"
-            className="hidden-file-input"
-            onChange={handleImportCsv}
-          />
-        </div>
-        <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
-          <button 
-            className={`btn ${nodeContentType === 'label' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => handleToggleContentType('label')}
+        <div className="inspector-switcher">
+          <button
+            className="inspector-arrow-btn"
+            type="button"
+            onClick={() => setInspectorView('tools')}
+            disabled={inspectorView === 'tools'}
+            aria-label="ツール画面へ移動"
           >
-            タイトル表示
+            ←
           </button>
-          <button 
-            className={`btn ${nodeContentType === 'formula' ? 'btn-primary' : 'btn-secondary'}`}
-            onClick={() => handleToggleContentType('formula')}
+          <span className="inspector-view-title">
+            {inspectorView === 'tools' ? 'ツール' : 'ノード詳細'}
+          </span>
+          <button
+            className="inspector-arrow-btn"
+            type="button"
+            onClick={() => setInspectorView('details')}
+            disabled={inspectorView === 'details'}
+            aria-label="ノード詳細画面へ移動"
           >
-            数式表示
+            →
           </button>
         </div>
-        <button className="btn btn-add" onClick={handleAddNode}>
-          + 新しい法則を追加
-        </button>
-        {selectedNode ? (
-          <div>
+
+        {inspectorView === 'tools' ? (
+          <div className="inspector-page">
+            <div className="io-section">
+              <h3 className="panel-section-title">JSON入出力</h3>
+              <div className="io-panel">
+                <button className="btn btn-secondary" onClick={() => handleExportJson('selected')}>
+                  選択部分をJSON
+                </button>
+                <button className="btn btn-secondary" onClick={() => handleExportJson('all')}>
+                  全体をJSON
+                </button>
+                <button className="btn btn-secondary" onClick={handleImportClick}>
+                  JSONから追加
+                </button>
+                <input
+                  ref={importFileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden-file-input"
+                  onChange={handleImportJson}
+                />
+              </div>
+            </div>
+            <div className="category-section">
+              <h3 className="panel-section-title">カテゴリー管理</h3>
+              <button className="btn btn-secondary btn-category-add" onClick={() => openNewCategoryModal(false)}>
+                カテゴリーを追加
+              </button>
+              <div className="category-list">
+                {categories.map((category) => (
+                  <div className="category-row" key={category.id}>
+                    <span className="category-color" style={{ backgroundColor: category.color }} />
+                    <span className="category-name">{category.name}</span>
+                    <button className="btn btn-secondary btn-small" onClick={() => openEditCategoryModal(category)}>
+                      編集
+                    </button>
+                    <button
+                      className="btn btn-delete btn-small"
+                      onClick={() => handleDeleteCategory(category.id)}
+                      disabled={category.id === 'default'}
+                    >
+                      削除
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="node-tools-section">
+              <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
+                <button 
+                  className={`btn ${nodeContentType === 'label' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => handleToggleContentType('label')}
+                >
+                  タイトル表示
+                </button>
+                <button 
+                  className={`btn ${nodeContentType === 'formula' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => handleToggleContentType('formula')}
+                >
+                  数式表示
+                </button>
+              </div>
+              <button className="btn btn-add" onClick={handleAddNode}>
+                + 新しい法則を追加
+              </button>
+            </div>
+          </div>
+        ) : selectedNode ? (
+          <div className="inspector-page">
           {isEditing ?(
             <div className="edit-form">
               <h3 className="inspector-title">編集モード</h3>
@@ -1271,7 +1304,7 @@ function PhysicsMapper() {
           )}      
         </div>) : (
           <div className="empty-state">
-            <p>ノードをクリックして<br/>詳細を表示</p>
+            <p>ここに説明が表示されます</p>
           </div>
         )}
       </div>

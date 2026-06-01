@@ -35,6 +35,43 @@
   box-shadow: -2px 0 5px rgba(0,0,0,0.1);
 }
 
+.inspector-switcher {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #d9d9d9;
+}
+
+.inspector-arrow-btn {
+  height: 34px;
+  padding: 0;
+  border: 1px solid #c9c9c9;
+  border-radius: 4px;
+  background: #fff;
+  color: #333;
+  cursor: pointer;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.inspector-arrow-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.inspector-view-title {
+  color: #333;
+  font-weight: 700;
+  text-align: center;
+}
+
+.inspector-page {
+  min-width: 0;
+}
+
 .inspector-title {
   margin-top: 0;
   color: #333;
@@ -67,15 +104,80 @@
   margin-top: 50px;
 }
 
+.io-section {
+  padding-bottom: 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #d9d9d9;
+}
+
+.category-section {
+  padding-bottom: 16px;
+  margin-bottom: 18px;
+  border-bottom: 1px solid #d9d9d9;
+}
+
+.panel-section-title {
+  margin: 0 0 10px;
+  color: #555;
+  font-size: 0.9rem;
+  letter-spacing: 0;
+}
+
 .io-panel {
   display: grid;
   grid-template-columns: 1fr;
   gap: 8px;
-  margin-bottom: 16px;
+}
+
+.node-tools-section {
+  margin-bottom: 20px;
 }
 
 .hidden-file-input {
   display: none;
+}
+
+.category-list {
+  display: grid;
+  gap: 8px;
+  max-height: 210px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.category-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.category-color {
+  width: 18px;
+  height: 18px;
+  border: 1px solid #aaa;
+  border-radius: 3px;
+}
+
+.category-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.btn-small {
+  padding: 5px 8px;
+  font-size: 0.82rem;
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.btn-category-add {
+  width: 100%;
+  margin-bottom: 10px;
 }
 
 /* 編集フォームのスタイル */
