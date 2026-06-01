@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo} from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef} from 'react';
 import ReactFlow, { 
   Controls, 
   Background, 
@@ -9,7 +9,7 @@ import ReactFlow, {
   useReactFlow,
   SelectionMode
 } from 'reactflow';
-import { InlineMath } from 'react-katex';
+import { BlockMath, InlineMath } from 'react-katex';
 import 'katex/dist/katex.min.css';
 import 'reactflow/dist/style.css'; // React Flowの基本スタイル
 import './App.css';
@@ -154,6 +154,429 @@ const categoryStyles = {
   default: { background: '#ffffff', border: '1px solid #777' }
 };
 
+const parseLatexDescription = (text = '') => {
+  const tokens = [];
+  let cursor = 0;
+  let textStart = 0;
+
+  const pushText = (end) => {
+    if (end > textStart) {
+      tokens.push({
+        type: 'text',
+        value: text.slice(textStart, end),
+        raw: text.slice(textStart, end),
+        start: textStart,
+        end
+      });
+    }
+  };
+
+  while (cursor < text.length) {
+    if (text.startsWith('$$', cursor)) {
+      const closeIndex = text.indexOf('$$', cursor + 2);
+      if (closeIndex !== -1) {
+        const value = text.slice(cursor + 2, closeIndex);
+        if (value.trim()) {
+          pushText(cursor);
+          tokens.push({
+            type: 'blockMath',
+            value,
+            raw: text.slice(cursor, closeIndex + 2),
+            start: cursor,
+            end: closeIndex + 2
+          });
+          cursor = closeIndex + 2;
+          textStart = cursor;
+          continue;
+        }
+      }
+    }
+
+    if (text[cursor] === '$' && text[cursor + 1] !== '$') {
+      const closeIndex = text.indexOf('$', cursor + 1);
+      if (closeIndex !== -1) {
+        const value = text.slice(cursor + 1, closeIndex);
+        if (value.trim()) {
+          pushText(cursor);
+          tokens.push({
+            type: 'inlineMath',
+            value,
+            raw: text.slice(cursor, closeIndex + 1),
+            start: cursor,
+            end: closeIndex + 1
+          });
+          cursor = closeIndex + 1;
+          textStart = cursor;
+          continue;
+        }
+      }
+    }
+
+    cursor += 1;
+  }
+
+  pushText(text.length);
+  return tokens;
+};
+
+const renderTextWithLineBreaks = (text) => {
+  return text.split('\n').map((line, index) => (
+    <React.Fragment key={index}>
+      {index > 0 && <br />}
+      {line}
+    </React.Fragment>
+  ));
+};
+
+const csvHeaders = ['record_type', 'payload_json'];
+
+const escapeCsvCell = (value) => {
+  const text = String(value ?? '');
+  return `"${text.replaceAll('"', '""')}"`;
+};
+
+const serializeCsv = (rows) => {
+  return [
+    csvHeaders.map(escapeCsvCell).join(','),
+    ...rows.map((row) => csvHeaders.map((header) => escapeCsvCell(row[header])).join(','))
+  ].join('\n');
+};
+
+const parseCsv = (text) => {
+  const rows = [];
+  let row = [];
+  let cell = '';
+  let inQuotes = false;
+
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    const nextChar = text[index + 1];
+
+    if (inQuotes) {
+      if (char === '"' && nextChar === '"') {
+        cell += '"';
+        index += 1;
+      } else if (char === '"') {
+        inQuotes = false;
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+    } else if (char === ',') {
+      row.push(cell);
+      cell = '';
+    } else if (char === '\n') {
+      row.push(cell);
+      rows.push(row);
+      row = [];
+      cell = '';
+    } else if (char !== '\r') {
+      cell += char;
+    }
+  }
+
+  row.push(cell);
+  rows.push(row);
+
+  if (rows.length === 0) return [];
+
+  const headers = rows[0];
+  return rows.slice(1)
+    .filter((cells) => cells.some((value) => value !== ''))
+    .map((cells) => Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ''])));
+};
+
+const buildExportRows = ({ nodes, edges, categories }) => {
+  const selectedNodeIds = new Set(nodes.map((node) => node.id));
+  const selectedCategoryIds = new Set(nodes.map((node) => node.data?.category).filter(Boolean));
+  const internalEdges = edges.filter((edge) => selectedNodeIds.has(edge.source) && selectedNodeIds.has(edge.target));
+
+  return [
+    {
+      record_type: 'metadata',
+      payload_json: JSON.stringify({ app: 'formulas_map', version: 1 })
+    },
+    ...categories
+      .filter((category) => selectedCategoryIds.has(category.id))
+      .map((category) => ({
+        record_type: 'category',
+        payload_json: JSON.stringify(category)
+      })),
+    ...nodes.map((node) => ({
+      record_type: 'node',
+      payload_json: JSON.stringify(node)
+    })),
+    ...internalEdges.map((edge) => ({
+      record_type: 'edge',
+      payload_json: JSON.stringify(edge)
+    }))
+  ];
+};
+
+const downloadCsv = (rows, filename) => {
+  const csv = serializeCsv(rows);
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+};
+
+const getNextNodeNumber = (nodes, idCount) => {
+  const maxNodeId = nodes.reduce((max, node) => {
+    const idNum = parseInt(node.id?.split('-')[1], 10);
+    return idNum > max ? idNum : max;
+  }, 0);
+  return Math.max(idCount, maxNodeId + 1, 1);
+};
+
+const makeUniqueCategoryId = (baseId, existingCategoryIds) => {
+  let index = 1;
+  let nextId = `${baseId}-imported`;
+  while (existingCategoryIds.has(nextId)) {
+    index += 1;
+    nextId = `${baseId}-imported-${index}`;
+  }
+  return nextId;
+};
+
+const buildImportedFlowPatch = ({ csvText, nodes, edges, categories, idCount }) => {
+  const csvRows = parseCsv(csvText);
+  const parsedRows = csvRows.map((row) => ({
+    recordType: row.record_type,
+    payload: JSON.parse(row.payload_json)
+  }));
+
+  const importedCategories = parsedRows
+    .filter((row) => row.recordType === 'category')
+    .map((row) => row.payload);
+  const importedNodes = parsedRows
+    .filter((row) => row.recordType === 'node')
+    .map((row) => row.payload);
+  const importedEdges = parsedRows
+    .filter((row) => row.recordType === 'edge')
+    .map((row) => row.payload);
+
+  if (importedNodes.length === 0) {
+    throw new Error('CSVにノード情報がありません。');
+  }
+
+  const nextCategories = [...categories];
+  const categoryIdMap = new Map();
+  const existingCategoryIds = new Set(categories.map((category) => category.id));
+
+  importedCategories.forEach((category) => {
+    if (!category?.id) return;
+
+    const sameCategory = categories.find((existing) => (
+      existing.id === category.id &&
+      existing.name === category.name &&
+      existing.color === category.color
+    ));
+    if (sameCategory) {
+      categoryIdMap.set(category.id, sameCategory.id);
+      return;
+    }
+
+    const matchingCategory = categories.find((existing) => (
+      existing.name === category.name &&
+      existing.color === category.color
+    ));
+    if (matchingCategory) {
+      categoryIdMap.set(category.id, matchingCategory.id);
+      return;
+    }
+
+    const nextId = existingCategoryIds.has(category.id)
+      ? makeUniqueCategoryId(category.id, existingCategoryIds)
+      : category.id;
+    existingCategoryIds.add(nextId);
+    categoryIdMap.set(category.id, nextId);
+    nextCategories.push({ ...category, id: nextId });
+  });
+
+  const nodeIdMap = new Map();
+  let nextNodeNumber = getNextNodeNumber(nodes, idCount);
+  const nextNodes = importedNodes.map((node) => {
+    const nextId = `node-${nextNodeNumber}`;
+    nextNodeNumber += 1;
+    nodeIdMap.set(node.id, nextId);
+
+    const oldCategoryId = node.data?.category || 'default';
+    const nextCategoryId = categoryIdMap.get(oldCategoryId)
+      || (existingCategoryIds.has(oldCategoryId) ? oldCategoryId : 'default');
+
+    return {
+      ...node,
+      id: nextId,
+      type: undefined,
+      className: undefined,
+      selected: false,
+      position: {
+        x: Number(node.position?.x || 0) + 40,
+        y: Number(node.position?.y || 0) + 40
+      },
+      data: {
+        ...node.data,
+        category: nextCategoryId,
+        nodeContentType: 'label'
+      }
+    };
+  });
+
+  const existingEdgeIds = new Set(edges.map((edge) => edge.id));
+  const nextEdges = importedEdges
+    .filter((edge) => nodeIdMap.has(edge.source) && nodeIdMap.has(edge.target))
+    .map((edge, index) => {
+      const source = nodeIdMap.get(edge.source);
+      const target = nodeIdMap.get(edge.target);
+      let nextId = `e-${source}-${target}`;
+      let suffix = index + 1;
+      while (existingEdgeIds.has(nextId)) {
+        suffix += 1;
+        nextId = `e-${source}-${target}-${suffix}`;
+      }
+      existingEdgeIds.add(nextId);
+
+      return {
+        ...edge,
+        id: nextId,
+        source,
+        target,
+        selected: false
+      };
+    });
+
+  return {
+    nodes: nextNodes,
+    edges: nextEdges,
+    categories: nextCategories,
+    idCount: nextNodeNumber
+  };
+};
+
+function DescriptionLatexView({ value }) {
+  const tokens = useMemo(() => parseLatexDescription(value), [value]);
+
+  return (
+    <div className="latex-description-view">
+      {tokens.map((token, index) => {
+        if (token.type === 'blockMath') {
+          return (
+            <div className="latex-block-view" key={`${token.start}-${index}`}>
+              <BlockMath math={token.value} />
+            </div>
+          );
+        }
+
+        if (token.type === 'inlineMath') {
+          return <InlineMath key={`${token.start}-${index}`} math={token.value} />;
+        }
+
+        return (
+          <span key={`${token.start}-${index}`}>
+            {renderTextWithLineBreaks(token.value)}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function DescriptionLatexEditor({ value, onChange }) {
+  const [editingTokenIndex, setEditingTokenIndex] = useState(null);
+  const [tokenDraft, setTokenDraft] = useState('');
+  const tokens = useMemo(() => parseLatexDescription(value), [value]);
+
+  const startTokenEdit = (token, index) => {
+    setEditingTokenIndex(index);
+    setTokenDraft(token.raw);
+  };
+
+  const saveTokenEdit = () => {
+    const token = tokens[editingTokenIndex];
+    if (!token) return;
+
+    onChange(`${value.slice(0, token.start)}${tokenDraft}${value.slice(token.end)}`);
+    setEditingTokenIndex(null);
+    setTokenDraft('');
+  };
+
+  const cancelTokenEdit = () => {
+    setEditingTokenIndex(null);
+    setTokenDraft('');
+  };
+
+  return (
+    <div className="latex-editor">
+      <textarea
+        className="latex-source-textarea"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <div className="latex-live-preview">
+        {tokens.map((token, index) => {
+          const key = `${token.start}-${index}`;
+
+          if (index === editingTokenIndex) {
+            return (
+              <span className="latex-token-editor" key={key}>
+                <textarea
+                  value={tokenDraft}
+                  onChange={(event) => setTokenDraft(event.target.value)}
+                  autoFocus
+                />
+                <span className="latex-token-actions">
+                  <button type="button" className="btn btn-primary" onClick={saveTokenEdit}>反映</button>
+                  <button type="button" className="btn btn-secondary" onClick={cancelTokenEdit}>戻す</button>
+                </span>
+              </span>
+            );
+          }
+
+          if (token.type === 'blockMath') {
+            return (
+              <button
+                type="button"
+                className="latex-token latex-token-block"
+                key={key}
+                onClick={() => startTokenEdit(token, index)}
+              >
+                <BlockMath math={token.value} />
+              </button>
+            );
+          }
+
+          if (token.type === 'inlineMath') {
+            return (
+              <button
+                type="button"
+                className="latex-token latex-token-inline"
+                key={key}
+                onClick={() => startTokenEdit(token, index)}
+              >
+                <InlineMath math={token.value} />
+              </button>
+            );
+          }
+
+          return (
+            <span key={key}>
+              {renderTextWithLineBreaks(token.value)}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 
 
 // --- メインコンポーネント ---
@@ -181,12 +604,15 @@ function PhysicsMapper() {
   
   // 選択されたノードの情報を保持する状態
   const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [selectedNodeIds, setSelectedNodeIds] = useState([]);
   const [selectedEdge, setSelectedEdge] = useState(null);
   const [isEditing, setIsEditing] = useState(false)
   const [isDragging, setIsDragging] = useState(false);
   const [formData, setFormData] = useState({label: '', formula: '', description: '', category: 'default'})
   const [highlightedNodes, setHighlightedNodes] = useState(new Set());
   const [relatedNodesInfo, setRelatedNodesInfo] = useState({sources: [], targets: []});
+  const [inspectorWidth, setInspectorWidth] = useState(300);
+  const importFileInputRef = useRef(null);
 
   // React Flowのインスタンス操作用（画面中心取得のため）
   const { getViewport } = useReactFlow();
@@ -243,6 +669,10 @@ function PhysicsMapper() {
   // エッジが変更された時の処理
   const onEdgesChange = useCallback((changes) => setEdges((eds) => applyEdgeChanges(changes, eds)),[]);
 
+  const onSelectionChange = useCallback(({ nodes: selectedNodes }) => {
+    setSelectedNodeIds(selectedNodes.map((node) => node.id));
+  }, []);
+
   const onEdgeClick = useCallback((event, edge) => {
     if (selectedEdge && selectedEdge.id === edge.id) {
       // 既に選択されているエッジを再度クリックした場合、パネルを閉じる
@@ -256,6 +686,30 @@ function PhysicsMapper() {
 }, [selectedEdge]);
   // ノード同士を手動でつないだ時の処理
   const onConnect = useCallback((params) => setEdges((eds) => addEdge({...params, typeId: 'derivation'}, eds)),[]);
+
+  const handleResizeStart = useCallback((event) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = inspectorWidth;
+
+    const handleMouseMove = (moveEvent) => {
+      const maxWidth = Math.max(240, window.innerWidth - 320);
+      const nextWidth = startWidth + startX - moveEvent.clientX;
+      setInspectorWidth(Math.min(maxWidth, Math.max(240, nextWidth)));
+    };
+
+    const handleMouseUp = () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  }, [inspectorWidth]);
 
   // ドラッグ開始時
   const onNodeDragStart = useCallback(() => {
@@ -295,6 +749,7 @@ function PhysicsMapper() {
   const onNodeClick = useCallback(
     (event, node) => {
       setSelectedNodeId(node.id);
+      setSelectedNodeIds([node.id]);
       setFormData(node.data);
       setIsEditing(false);
 
@@ -339,6 +794,7 @@ function PhysicsMapper() {
   const onPaneClick = useCallback(
     () => {
       setSelectedNodeId(null);
+      setSelectedNodeIds([]);
       setIsEditing(false);
       setHighlightedNodes(new Set());
       setSelectedEdge(null);
@@ -372,7 +828,7 @@ function PhysicsMapper() {
     // 現在の画面の中心座標を計算する
     const { x, y, zoom } = getViewport();
     // 画面中央（左側のキャンバスエリア）の大体の中心
-    const centerX = (-x + (window.innerWidth - 300) / 2) / zoom;
+    const centerX = (-x + (window.innerWidth - inspectorWidth) / 2) / zoom;
     const centerY = (-y + window.innerHeight / 2) / zoom;
 
     const newId = `node-${idCount}`;
@@ -436,6 +892,63 @@ function PhysicsMapper() {
     );
     setIsEditing(false); // 閲覧モードに戻る
   };
+
+  const handleExportCsv = useCallback((scope) => {
+    const nodeIdsToExport = scope === 'all'
+      ? new Set(nodes.map((node) => node.id))
+      : new Set(selectedNodeIds.length > 0 ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : []);
+    const nodesToExport = nodes.filter((node) => nodeIdsToExport.has(node.id));
+
+    if (nodesToExport.length === 0) {
+      window.alert('エクスポートするノードが選択されていません。');
+      return;
+    }
+
+    const rows = buildExportRows({ nodes: nodesToExport, edges, categories });
+    const dateText = new Date().toISOString().slice(0, 10);
+    const filename = scope === 'all'
+      ? `formulas-map-all-${dateText}.csv`
+      : `formulas-map-selection-${dateText}.csv`;
+    downloadCsv(rows, filename);
+  }, [categories, edges, nodes, selectedNodeId, selectedNodeIds]);
+
+  const handleImportClick = useCallback(() => {
+    importFileInputRef.current?.click();
+  }, []);
+
+  const handleImportCsv = useCallback((event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const patch = buildImportedFlowPatch({
+          csvText: String(reader.result || ''),
+          nodes,
+          edges,
+          categories,
+          idCount
+        });
+
+        setCategories(patch.categories);
+        setNodes((currentNodes) => currentNodes.concat(patch.nodes));
+        setEdges((currentEdges) => currentEdges.concat(patch.edges));
+        setIdCount(patch.idCount);
+        setSelectedNodeId(null);
+        setSelectedNodeIds([]);
+        setHighlightedNodes(new Set());
+        setRelatedNodesInfo({ sources: [], targets: [] });
+        setSelectedEdge(null);
+      } catch (error) {
+        console.error('CSVのインポートに失敗しました', error);
+        window.alert('CSVのインポートに失敗しました。ファイル形式を確認してください。');
+      } finally {
+        event.target.value = '';
+      }
+    };
+    reader.readAsText(file);
+  }, [categories, edges, idCount, nodes]);
 
   const onEdgeDoubleClick = useCallback((event, edge) => {
     // ダブルクリックしたエッジをedges配列からフィルタリングして削除
@@ -513,7 +1026,10 @@ function PhysicsMapper() {
 }, [edges, edgeTypes, highlightedNodes]);
 
   return (
-    <div className="app-container">
+    <div
+      className="app-container"
+      style={{ gridTemplateColumns: `minmax(320px, 1fr) 8px ${inspectorWidth}px` }}
+    >
       {/* 左側：マップ領域 */}
       <div className="canvas-area">
         <ReactFlow
@@ -523,6 +1039,7 @@ function PhysicsMapper() {
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
           onNodeClick={onNodeClick}
+          onSelectionChange={onSelectionChange}
           onPaneClick={onPaneClick}
           onEdgeClick={onEdgeClick}
           onEdgeDoubleClick={onEdgeDoubleClick}
@@ -614,8 +1131,33 @@ function PhysicsMapper() {
         )}
       </div>
 
+      <div
+        className="resize-handle"
+        role="separator"
+        aria-orientation="vertical"
+        onMouseDown={handleResizeStart}
+      />
+
       {/* 右側：詳細パネル領域 */}
       <div className="inspector-area">
+        <div className="io-panel">
+          <button className="btn btn-secondary" onClick={() => handleExportCsv('selected')}>
+            選択部分をCSV
+          </button>
+          <button className="btn btn-secondary" onClick={() => handleExportCsv('all')}>
+            全体をCSV
+          </button>
+          <button className="btn btn-secondary" onClick={handleImportClick}>
+            CSVから追加
+          </button>
+          <input
+            ref={importFileInputRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden-file-input"
+            onChange={handleImportCsv}
+          />
+        </div>
         <div style={{ display: 'flex', gap: '10px', marginBottom: '20px' }}>
           <button 
             className={`btn ${nodeContentType === 'label' ? 'btn-primary' : 'btn-secondary'}`}
@@ -672,8 +1214,9 @@ function PhysicsMapper() {
               </select>
 
               <label>説明・メモ</label>
-              <textarea  value={formData.description}
-                onChange={(e) => setFormData({...formData, description: e.target.value})}
+              <DescriptionLatexEditor
+                value={formData.description || ''}
+                onChange={(description) => setFormData({...formData, description})}
               />
 
               <div className="action-buttons">
@@ -690,7 +1233,7 @@ function PhysicsMapper() {
               </div>
               <div className="description-box">
                 <h3>解説</h3>
-                <p>{selectedNode.data.description}</p>
+                <DescriptionLatexView value={selectedNode.data.description || ''} />
                 <div className="related-info-panel" style={{ marginTop: '20px', borderTop: '1px solid #ccc', paddingTop: '10px' }}>
                     <h4 style={{ marginBottom: '5px' }}>&gt;&gt;&gt; 導出元</h4>
                     {relatedNodesInfo.sources.length > 0 ? (
