@@ -18,63 +18,18 @@ const nodeTypes = { custom: CustomNode };
 
 // --- 初期データ（ここを将来的にユーザー入力やJSON読み込みにする） ---
 const flowKey = 'physics-mapper-flow';
+const dbName = 'physics-mapper-db';
+const dbVersion = 1;
+const flowStoreName = 'flows';
 
-const getInitialFlow = () => {
-  if (typeof window === 'undefined') {
-    // サーバーサイドレンダリング環境など、windowオブジェクトがない場合は初期データを返す
-    return { 
-      nodes: [], 
-      edges: [],
-      idCount: 1,
-      categories: [
-        { id: 'default', name: '未分類', color: '#D3D3D3' },
-        { id: 'mech', name: '古典力学', color: '#B3E5FC' },
-        { id: 'em', name: '電磁気学', color: '#FFCDD2' },
-        { id: 'therm', name: '熱力学', color: '#C8E6C9' },
-      ]
-    };
-  }
-  
-  const savedFlow = localStorage.getItem(flowKey);
-  
-  if (savedFlow) {
-    
-    const { nodes, edges, idCount, categories} = JSON.parse(savedFlow);
-    let ncategories;
-    //console.log("initial flow " + categories);
-    if(categories === undefined){
-      //console.log("react undefined");
-      ncategories = [
-        { id: 'default', name: '未分類', color: '#D3D3D3' },
-        { id: 'mech', name: '古典力学', color: '#B3E5FC' },
-        { id: 'em', name: '電磁気学', color: '#FFCDD2' },
-        { id: 'therm', name: '熱力学', color: '#C8E6C9' },
-      ];
-      //console.log("defined " + ncategories);
-    }else{
-      ncategories = categories;
-    }
-    //console.log("initial flow 2 " + ncategories);
-    
-    // data.nodeContentType を現在のグローバル設定で上書き
-    const unifiedNodes = nodes.map(node => ({...node, data: {...node.data, nodeContentType: 'label'}}));
+const defaultCategories = [
+  { id: 'default', name: '未分類', color: '#D3D3D3' },
+  { id: 'mech', name: '古典力学', color: '#B3E5FC' },
+  { id: 'em', name: '電磁気学', color: '#FFCDD2' },
+  { id: 'therm', name: '熱力学', color: '#C8E6C9' },
+];
 
-    // IDカウンターの安全な初期化
-    // 既存ノードの最大IDを求め、その次の番号から開始するようにする
-    const maxId = nodes.reduce((max, node) => {
-        const idNum = parseInt(node.id.split('-')[1]);
-        return idNum > max ? idNum : max;
-    }, 0);
-    
-    return {
-      nodes: unifiedNodes,
-      edges: edges,
-      idCount: maxId > 0 ? maxId + 1 : 1 ,// 1からスタート
-      categories: ncategories
-    };
-  }
-
-  // データがなければデフォルトの初期データを返す
+const getDefaultFlow = () => {
   return {
     nodes: [
       { 
@@ -92,13 +47,103 @@ const getInitialFlow = () => {
       { id: 'e1-2', source: 'node-2', target: 'node-1', animated: true, label: '代入' }
     ],
     idCount: 3,
-    categories: [
-      { id: 'default', name: '未分類', color: '#D3D3D3' },
-      { id: 'mech', name: '古典力学', color: '#B3E5FC' },
-      { id: 'em', name: '電磁気学', color: '#FFCDD2' },
-      { id: 'therm', name: '熱力学', color: '#C8E6C9' },
-    ]
+    categories: defaultCategories
   };
+};
+
+const normalizeFlow = (flow) => {
+  const nodes = Array.isArray(flow?.nodes) ? flow.nodes : [];
+  const edges = Array.isArray(flow?.edges) ? flow.edges : [];
+  const categories = Array.isArray(flow?.categories) ? flow.categories : defaultCategories;
+
+  // data.nodeContentType は現在のグローバル設定で上書きする
+  const unifiedNodes = nodes.map(node => ({
+    ...node,
+    data: { ...node.data, nodeContentType: 'label' }
+  }));
+
+  // 既存ノードの最大IDを求め、その次の番号から開始するようにする
+  const maxId = unifiedNodes.reduce((max, node) => {
+    const idNum = parseInt(node.id?.split('-')[1], 10);
+    return idNum > max ? idNum : max;
+  }, 0);
+
+  return {
+    nodes: unifiedNodes,
+    edges,
+    idCount: maxId > 0 ? maxId + 1 : 1,
+    categories
+  };
+};
+
+const openFlowDatabase = () => {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(dbName, dbVersion);
+
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(flowStoreName)) {
+        db.createObjectStore(flowStoreName);
+      }
+    };
+
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+};
+
+const readFlowFromIndexedDb = async () => {
+  const db = await openFlowDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(flowStoreName, 'readonly');
+    const store = transaction.objectStore(flowStoreName);
+    const request = store.get(flowKey);
+
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => db.close();
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error);
+    };
+  });
+};
+
+const writeFlowToIndexedDb = async (flow) => {
+  const db = await openFlowDatabase();
+
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(flowStoreName, 'readwrite');
+    const store = transaction.objectStore(flowStoreName);
+    store.put(flow, flowKey);
+
+    transaction.oncomplete = () => {
+      db.close();
+      resolve();
+    };
+    transaction.onerror = () => {
+      db.close();
+      reject(transaction.error);
+    };
+  });
+};
+
+const loadInitialFlow = async () => {
+  if (typeof window === 'undefined' || typeof indexedDB === 'undefined') {
+    return getDefaultFlow();
+  }
+
+  const legacySavedFlow = localStorage.getItem(flowKey);
+  if (legacySavedFlow) {
+    const migratedFlow = normalizeFlow(JSON.parse(legacySavedFlow));
+    await writeFlowToIndexedDb(migratedFlow);
+    localStorage.removeItem(flowKey);
+    return migratedFlow;
+  }
+
+  const indexedDbFlow = await readFlowFromIndexedDb();
+  return indexedDbFlow ? normalizeFlow(indexedDbFlow) : getDefaultFlow();
 };
 
 const categoryStyles = {
@@ -114,14 +159,14 @@ const categoryStyles = {
 // --- メインコンポーネント ---
 function PhysicsMapper() {
 
-  const initialFlow = getInitialFlow();
+  const initialFlow = getDefaultFlow();
 
   //console.log("start physicsmapper");
   //console.log(initialFlow.categories)
   // ノードとエッジの状態管理
   const [categories, setCategories] = useState(initialFlow.categories);
 
-  const [edgeTypes, setEdgeTypes] = useState([
+  const [edgeTypes] = useState([
     { id: 'derivation', name: '導出関係', style: { stroke: '#000000' }, marker: { type: 'arrowclosed' } },
     { id: 'definition', name: '定義', style: { stroke: '#007BFF', strokeWidth: 2 }, marker: { type: 'arrowclosed' }, label: 'Def.' },
     { id: 'equivalence', name: '同値関係', style: { stroke: '#28A745', strokeDasharray: '5, 5' }, marker: { type: 'arrowclosed', style: { fill: '#28A745' } }, type: 'default', label: '⇔' }, // カスタムエッジを使用
@@ -130,9 +175,9 @@ function PhysicsMapper() {
   const [nodes, setNodes] = useState(initialFlow.nodes);
   const [edges, setEdges] = useState(initialFlow.edges);
   const [idCount, setIdCount] = useState(initialFlow.idCount);
+  const [isFlowLoaded, setIsFlowLoaded] = useState(false);
   const [nodeContentType, setNodeContentType] = useState('label');
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
-  const [editingCategory, setEditingCategory] = useState(null);
   
   // 選択されたノードの情報を保持する状態
   const [selectedNodeId, setSelectedNodeId] = useState(null);
@@ -144,23 +189,54 @@ function PhysicsMapper() {
   const [relatedNodesInfo, setRelatedNodesInfo] = useState({sources: [], targets: []});
 
   // React Flowのインスタンス操作用（画面中心取得のため）
-  const { project, getViewport } = useReactFlow();
+  const { getViewport } = useReactFlow();
 
   useEffect(() => {
+    let isCancelled = false;
+
+    loadInitialFlow()
+      .then((loadedFlow) => {
+        if (isCancelled) return;
+
+        setNodes(loadedFlow.nodes);
+        setEdges(loadedFlow.edges);
+        setIdCount(loadedFlow.idCount);
+        setCategories(loadedFlow.categories);
+      })
+      .catch((error) => {
+        console.error('IndexedDBからのデータ読み込みに失敗しました', error);
+      })
+      .finally(() => {
+        if (!isCancelled) {
+          setIsFlowLoaded(true);
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isFlowLoaded) return;
+
     // ユーザーが操作を停止した後に実行されるよう、タイマーを設定
     const timer = setTimeout(() => {
-        if (nodes.length > 0) {
-            const flowToSave = JSON.stringify({ nodes, edges, idCount, categories});
-            localStorage.setItem(flowKey, flowToSave);
-            console.log("データ保存を実行しました");
-        }
+      const flowToSave = { nodes, edges, idCount, categories };
+      writeFlowToIndexedDb(flowToSave)
+        .then(() => {
+          console.log("IndexedDBへのデータ保存を実行しました");
+        })
+        .catch((error) => {
+          console.error('IndexedDBへのデータ保存に失敗しました', error);
+        });
     }, 500); // 500ミリ秒 (0.5秒) の遅延を設定
 
     // クリーンアップ関数: 新しい変更があったら古いタイマーをキャンセル
     return () => clearTimeout(timer);
 
-// nodes, edges, idCount のいずれかが変更されるたびにタイマーがリセットされる
-}, [nodes, edges, idCount, categories]);
+// nodes, edges, idCount, categories のいずれかが変更されるたびにタイマーがリセットされる
+}, [nodes, edges, idCount, categories, isFlowLoaded]);
 
   // ノードがドラッグされた時の処理
   const onNodesChange = useCallback((changes) => setNodes((nds) => applyNodeChanges(changes, nds)),[]);
@@ -188,7 +264,7 @@ function PhysicsMapper() {
   }, []);
 
   // ドラッグ終了時
-  const onNodeDragStop = useCallback((event, node) => {
+  const onNodeDragStop = useCallback(() => {
     // ドラッグ終了後、ハイライトと選択状態を復元
     setIsDragging(false); 
   
@@ -256,7 +332,7 @@ function PhysicsMapper() {
     setRelatedNodesInfo({sources, targets});
     setHighlightedNodes(newHighlightedNodes);
     },
-    [edges]
+    [edges, nodes]
   );
 
   // 背景（キャンバス）をクリックしたら選択解除
@@ -290,19 +366,6 @@ function PhysicsMapper() {
         }
     });
     setIsCategoryModalOpen(false); // モーダルを閉じる
-    setEditingCategory(null);
-  }, []);
-
-
-// ★★★ カテゴリーの削除処理 (オプションだが推奨) ★★★
-  const handleDeleteCategory = useCallback((category) => {
-    setCategories(prevCategories => prevCategories.filter(c => c.id !== category));
-
-    // ノードデータも未分類に戻す処理（ここでは省略。必要なら後で追加）
-    // setNodes(prevNodes => prevNodes.map(n => 
-    //     n.data.categoryId === categoryId ? { ...n, data: { ...n.data, categoryId: 'default' } } : n
-    // ));
-
   }, []);
 
   const handleAddNode = () => {
@@ -432,9 +495,8 @@ function PhysicsMapper() {
         const isHighlighted = highlightedNodes.size === 0 || 
                           (highlightedNodes.has(edge.source) && highlightedNodes.has(edge.target));
     
-        const style = {
+        const highlightStyle = {
           strokeWidth: isHighlighted ? 2 : 1,
-          stroke: isHighlighted ? '#222' : '#999',
           opacity: isHighlighted ? 1 : 0.2
         };
 
@@ -443,12 +505,12 @@ function PhysicsMapper() {
             ...edge,
             // React Flowが認識する標準プロパティに変換して適用
             type: edgeType.type || 'default', // カスタムタイプがなければ 'default'
-            style: edgeType.style,
+            style: { ...edgeType.style, ...highlightStyle },
             markerEnd: edgeType.marker,
             label: edgeType.label,
         };
     });
-}, [edges, edgeTypes]);
+}, [edges, edgeTypes, highlightedNodes]);
 
   return (
     <div className="app-container">
